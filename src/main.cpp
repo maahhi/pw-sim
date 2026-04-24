@@ -6,95 +6,101 @@
 #include "fut/stubs/SlowFut.hpp"
 
 #include <cstdio>
-#include <cstdlib>     // EXIT_SUCCESS, EXIT_FAILURE
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
 // =============================================================================
-// pw-sim  —  Tier 1 entry point
+// pw-sim  —  Tier 2 entry point
 //
 // HOW TO SWITCH THE FUT:
-//   Edit the "Active FUT" section below. Choose one of the three stubs, or
-//   replace it with your own lambda / function that matches FutFn's signature.
+//   Edit make_active_fut() below.
 //
 // HOW TO CHANGE CONFIG:
-//   Edit the SimConfig fields below. In Tier 3 this will be a TOML file + CLI.
+//   Edit make_config() below. Tier 3 will load this from a TOML file + CLI.
 // =============================================================================
 
-// -----------------------------------------------------------------------------
-// Config — edit these values, recompile, re-run
-// -----------------------------------------------------------------------------
 static SimConfig make_config(int argc, char* argv[]) {
     SimConfig cfg;
 
-    // IO — override via first two positional args if provided:
-    //   ./pw-sim input.wav output.wav
+    // Positional args: ./pw-sim [input.wav] [output.wav]
     if (argc >= 2) cfg.input_file  = argv[1];
     if (argc >= 3) cfg.output_file = argv[2];
 
-    // Engine
-    cfg.chunk_size    = 256;     // frames per FUT call
-    cfg.sample_rate   = 48000;   // Hz — used for deadline computation only
-    cfg.warmup_chunks = 4;       // chunks to run before measuring
+    // ── IO ───────────────────────────────────────────────────────────────────
+    cfg.log_file      = "pw-sim.log.csv";
+
+    // ── Engine ───────────────────────────────────────────────────────────────
+    cfg.chunk_size    = 256;      // frames per FUT call (try 64, 128, 512, 1024)
+    cfg.sample_rate   = 48000;    // Hz — must match input file for correct deadline
+    cfg.warmup_chunks = 4;
+
+    // ── Clock mode ───────────────────────────────────────────────────────────
+    // SEQUENTIAL : overruns logged only, FUT output always written
+    // REALTIME   : overruns trigger xrun_policy, virtual clock tracks debt
+    cfg.clock_mode = ClockMode::SEQUENTIAL;
+    // cfg.clock_mode = ClockMode::REALTIME;
+
+    // ── Pre-fill ─────────────────────────────────────────────────────────────
+    // ZEROS       : realistic (PipeWire pre-zeros the output buffer)
+    // PASSTHROUGH : simulate a plugin that did memcpy(out,in) as safety net
+    cfg.pre_fill = PreFillPolicy::ZEROS;
+    // cfg.pre_fill = PreFillPolicy::PASSTHROUGH;
+
+    // ── REALTIME mode options ─────────────────────────────────────────────────
+    cfg.xrun_policy = XrunPolicy::ZEROS;          // silence (PipeWire default)
+    // cfg.xrun_policy = XrunPolicy::REPEAT_LAST; // repeat last good chunk
+    // cfg.xrun_policy = XrunPolicy::PASSTHROUGH; // dry audio for that chunk
+
+    // Subtract from budget to model driver/scheduling overhead:
+    cfg.deadline_offset_us = 0.0;   // e.g. 200.0 for 200us overhead model
+
+    // ── Probes ────────────────────────────────────────────────────────────────
+    cfg.probe_cpu_time          = true;
+    cfg.probe_context_switches  = true;
+    cfg.probe_page_faults       = true;
+
+    // ── Startup checks ────────────────────────────────────────────────────────
+    cfg.warn_cpu_governor = true;
+    cfg.try_rt_priority   = false;  // true = attempt SCHED_FIFO (needs root)
 
     return cfg;
 }
 
-// -----------------------------------------------------------------------------
-// Active FUT — comment/uncomment to choose, or write your own below
-// -----------------------------------------------------------------------------
 static FutFn make_active_fut() {
 
-    // ── Option 1: Passthrough ────────────────────────────────────────────────
-    // Output == input. Use to verify the simulator pipeline is correct.
-    // Expected: output audio sounds identical to input, 0 overruns.
-    //
+    // ── Option 1: Passthrough ─────────────────────────────────────────────────
+    // Output == input. Verifies the simulator pipeline is correct end-to-end.
     //return make_passthrough_fut();
 
-    // ── Option 2: Gain ───────────────────────────────────────────────────────
-    // Attenuates or amplifies. Use to verify audio alteration works.
-    // Expected: output sounds quieter/louder, 0 overruns.
-    //
-    //return make_gain_fut(/*gain=*/0.1f);
+    // ── Option 2: Gain ────────────────────────────────────────────────────────
+    // return make_gain_fut(/*gain=*/0.5f);
 
-    // ── Option 3: Slow ───────────────────────────────────────────────────────
-    // Passthrough with an artificial sleep to trigger overruns.
-    // Use to verify overrun detection and (in Tier 2) xrun policy.
-    //
-    // delay_us=8000 with chunk=256/48kHz (budget=5333µs) → every chunk overruns
-    // slow_every_n=20 → only every 20th chunk overruns (~5% overrun rate)
-    //
-     return make_slow_fut(/*delay_us=*/8000, /*slow_every_n=*/0);
+    // ── Option 3: Slow — triggers overruns deliberately ───────────────────────
+    // delay_us=8000, budget=5333us → every chunk overruns (ratio ~1.5x)
+    // slow_every_n=20 → only every 20th chunk overruns (~5% rate)
+    // return make_slow_fut(/*delay_us=*/8000, /*slow_every_n=*/0);
     // return make_slow_fut(/*delay_us=*/8000, /*slow_every_n=*/20);
 
     // ── Option 4: Your FUT ───────────────────────────────────────────────────
-    // Replace with your ML model or any function matching FutFn:
-    //
-    // return [](const float* input, float* output,
-    //           size_t frames, size_t channels, size_t chunk_index)
-    // {
-    //     // your processing here
-    //     (void)chunk_index;
-    //     for (size_t i = 0; i < frames * channels; ++i)
-    //         output[i] = input[i];  // replace with real processing
-    // };
+     return [](const float* input, float* output,
+               size_t frames, size_t channels, size_t chunk_index)
+     {
+         (void)chunk_index;
+         for (size_t i = 0; i < frames * channels; ++i)
+             output[i] = input[i]*0.2;  // replace with your model
+    };
 }
 
-// -----------------------------------------------------------------------------
-// main
-// -----------------------------------------------------------------------------
 int main(int argc, char* argv[]) {
     try {
         SimConfig cfg = make_config(argc, argv);
         FutFn     fut = make_active_fut();
-
         SimEngine engine(cfg, std::move(fut));
         engine.run();
-
         return EXIT_SUCCESS;
-
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "\n❌ pw-sim error: %s\n\n", e.what());
+        std::fprintf(stderr, "\npw-sim error: %s\n\n", e.what());
         return EXIT_FAILURE;
     }
 }

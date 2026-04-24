@@ -34,6 +34,10 @@ set(SOURCES
   src/io/AudioReader.cpp
   src/io/AudioWriter.cpp
   src/engine/SimEngine.cpp
+  src/engine/VirtualClock.cpp
+  src/engine/XrunPolicy.cpp
+  src/engine/ProbeReader.cpp
+  src/metrics/MetricsWriter.cpp
 )
 
 add_executable(pw-sim ${SOURCES})
