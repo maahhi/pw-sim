@@ -1,0 +1,120 @@
+I am writing a C++ function to plug into pw-sim, a PipeWire plugin simulator.
+The simulator calls my function once per audio chunk, measures how long it takes,
+and tells me whether it would survive real-time deadlines in PipeWire.
+
+--- THE FUNCTION SIGNATURE I MUST MATCH ---
+
+using FutFn = std::function<void(
+    const float* input,      // read-only input buffer
+    float*       output,     // write your result here
+    size_t       frames,     // number of PCM frames in this chunk (e.g. 256)
+    size_t       channels,   // number of audio channels (1=mono, 2=stereo)
+    size_t       chunk_index // monotonically increasing call counter, 0-based
+)>;
+
+--- BUFFER LAYOUT ---
+
+Both input and output are interleaved float32.
+Stereo example for frames=4:
+  [L0, R0, L1, R1, L2, R2, L3, R3]
+Total floats per buffer = frames * channels.
+Samples are normalized: range is [-1.0, 1.0].
+Input is read-only. Output is pre-allocated by the caller — just write into it.
+
+--- TIMING CONTEXT ---
+
+chunk_size = 256 frames (configurable, common values: 64, 128, 256, 512, 1024)
+sample_rate = 48000 Hz
+deadline = chunk_size / sample_rate * 1,000,000 microseconds
+         = 256 / 48000 * 1e6 = 5333 µs  (~5.3 ms) for the default config
+
+My function must return within this deadline on every call.
+If it doesn't, the simulator flags it as an overrun and in REALTIME mode
+replaces my output with silence (or another xrun policy) — exactly what
+PipeWire would do in a real deployment.
+
+--- HARD RULES (same as a real PipeWire plugin) ---
+
+1. No heap allocation on the hot path.
+   malloc/free/new/delete can trigger kernel page allocation — unpredictable latency.
+   Pre-allocate everything before the first call (use chunk_index == 0 as init guard,
+   or allocate in the lambda capture before returning it).
+
+2. No blocking calls.
+   No sleep(), no file IO, no network, no mutex wait, no condition variable.
+   Any blocking syscall will cause an immediate xrun in PipeWire.
+
+3. No spawning threads inside the function.
+   The function is called synchronously. Thread creation has high overhead.
+   If you need worker threads, create them once before the loop starts
+   and communicate via a lock-free queue.
+
+4. No cold memory access on the hot path.
+   If your model has large weight tensors, touch/read them during warmup
+   (chunk_index < warmup_chunks) so they are in CPU cache before measurement starts.
+   The simulator runs warmup_chunks=4 calls before recording any metrics.
+
+5. Output must always be fully written.
+   Even if your processing only covers part of the buffer, write all
+   frames * channels floats. Uninitialized output = undefined audio.
+
+--- WHAT THE SIMULATOR MEASURES PER CHUNK ---
+
+- wall_us       : actual wall-clock time your function took (CLOCK_MONOTONIC)
+- cpu_us        : CPU time on calling thread (CLOCK_THREAD_CPUTIME_ID)
+- wall_ratio    : wall_us / deadline_us  — must stay below 1.0
+- overrun       : true if wall_us > deadline_us
+- cumulative_debt_us : how far behind the virtual PipeWire clock you are
+- vol_ctx_sw    : voluntary context switches — you blocked on something
+- invol_ctx_sw  : involuntary context switches — OS preempted you
+- page_faults_minor  : you touched unmapped memory (allocation / first access)
+- page_faults_major  : you triggered disk IO — critical, fix immediately
+
+--- SIGNALS TO WATCH IN THE SUMMARY ---
+
+wall p99 < 0.5x deadline   → safe headroom, good to deploy
+wall p99 between 0.5–0.9x  → acceptable, watch under load  
+wall p99 > 1.0x deadline   → will xrun in PipeWire, must optimize
+p99 >> p50                 → unpredictable spikes, dangerous even if average is fine
+wall_us >> cpu_us          → function is waiting (blocked or preempted), not computing
+V flags on chunks          → blocking call inside function, find and remove it
+P flags on early chunks    → normal model warm-up, covered by warmup_chunks
+P flags on every chunk     → allocating on the hot path, pre-allocate instead
+M flags anywhere           → major page fault in RT context, critical
+
+--- HOW TO STRUCTURE A STATEFUL MODEL ---
+
+// Pre-allocate state in the capture, before the lambda is returned.
+// This runs once, before any chunk is processed.
+auto model_state = std::make_shared<MyModel>(frames, channels);
+model_state->load_weights("model.bin");
+model_state->prewarm();  // touch all weight tensors
+
+return [model_state](const float* input, float* output,
+                     size_t frames, size_t channels, size_t chunk_index)
+{
+    // chunk_index == 0 means first real call after warmup
+    // All allocation and IO must already be done — just compute here
+    model_state->process(input, output, frames, channels);
+};
+
+--- CURRENT SIMULATOR CONFIG (defaults, edit src/main.cpp to change) ---
+
+chunk_size         = 256 frames
+sample_rate        = 48000 Hz
+deadline           = 5333 µs
+warmup_chunks      = 4
+clock_mode         = SEQUENTIAL (safe default; switch to REALTIME for PW fidelity)
+xrun_policy        = ZEROS (silence on overrun — what PipeWire does)
+pre_fill           = ZEROS (output buffer is zeroed before your function is called)
+probe_cpu_time     = true
+probe_ctx_switches = true
+probe_page_faults  = true
+
+--- GOAL ---
+
+I want my function to achieve:
+  - wall p99 < 0.7x deadline  (leaves headroom for OS jitter)
+  - 0 overruns in REALTIME mode
+  - 0 V/I/M flags
+  - P flags only during warmup chunks, not after

@@ -371,3 +371,5 @@ pw-sim/
     └── metrics/
         └── MetricsWriter.hpp/.cpp ← CSV writer + summary printer
 ```
+## fut helper
+`fut-prompt-helper.txt` is a summary that help you write your fut easier with help of llms
