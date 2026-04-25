@@ -4,9 +4,11 @@
 #include "fut/stubs/PassthroughFut.hpp"
 #include "fut/stubs/GainFut.hpp"
 #include "fut/stubs/SlowFut.hpp"
+#include "fut/RnnoiseFut.hpp"
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
@@ -14,11 +16,23 @@
 // pw-sim  —  Tier 2 entry point
 //
 // HOW TO SWITCH THE FUT:
-//   Edit make_active_fut() below.
+//   Edit make_active_fut() below, or pass --rnnoise on the command line.
 //
 // HOW TO CHANGE CONFIG:
 //   Edit make_config() below. Tier 3 will load this from a TOML file + CLI.
 // =============================================================================
+
+// Strip known flags from argv in-place; returns true if flag was present.
+static bool consume_flag(int& argc, char* argv[], const char* flag) {
+    bool found = false;
+    int j = 0;
+    for (int i = 0; i < argc; ++i) {
+        if (std::strcmp(argv[i], flag) == 0) { found = true; }
+        else                                 { argv[j++] = argv[i]; }
+    }
+    argc = j;
+    return found;
+}
 
 static SimConfig make_config(int argc, char* argv[]) {
     SimConfig cfg;
@@ -67,7 +81,14 @@ static SimConfig make_config(int argc, char* argv[]) {
     return cfg;
 }
 
-static FutFn make_active_fut() {
+static FutFn make_active_fut(bool use_rnnoise) {
+
+    // ── RNNoise (xiph/rnnoise) noise suppression ──────────────────────────────
+    // Enabled via: ./pw-sim --rnnoise [input.wav] [output.wav]
+    if (use_rnnoise) {
+        std::fprintf(stderr, "[pw-sim] FUT: RNNoise (480-sample frames, ±32768 scale)\n");
+        return make_rnnoise_fut();
+    }
 
     // ── Option 1: Passthrough ─────────────────────────────────────────────────
     // Output == input. Verifies the simulator pipeline is correct end-to-end.
@@ -94,8 +115,9 @@ static FutFn make_active_fut() {
 
 int main(int argc, char* argv[]) {
     try {
+        bool use_rnnoise = consume_flag(argc, argv, "--rnnoise");
         SimConfig cfg = make_config(argc, argv);
-        FutFn     fut = make_active_fut();
+        FutFn     fut = make_active_fut(use_rnnoise);
         SimEngine engine(cfg, std::move(fut));
         engine.run();
         return EXIT_SUCCESS;

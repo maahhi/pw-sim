@@ -37,9 +37,9 @@
 // =============================================================================
 
 struct ProbeSnapshot {
-    long vol_ctx   = 0;   // voluntary context switches (from /proc/self/status)
+    long vol_ctx   = 0;   // voluntary context switches
     long invol_ctx = 0;   // involuntary context switches
-    long min_faults = 0;  // minor page faults (from getrusage RUSAGE_THREAD)
+    long min_faults = 0;  // minor page faults
     long maj_faults = 0;  // major page faults
 };
 

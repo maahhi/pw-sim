@@ -3,49 +3,48 @@
 #include <cstring>
 
 // =============================================================================
-// ProbeSnapshot  —  read /proc/self/status for context switch counters
-//
-// /proc/self/status contains lines like:
-//   voluntary_ctxt_switches:   142
-//   nonvoluntary_ctxt_switches: 3
-//
-// These are cumulative per-process counters. We read them before and after
-// the FUT call and compute the delta. Reading the file takes ~1–3 µs.
-// =============================================================================
-
-static void read_ctx_switches(long& vol, long& invol) {
-    vol   = 0;
-    invol = 0;
-
-    FILE* f = std::fopen("/proc/self/status", "r");
-    if (!f) return;
-
-    char line[256];
-    int  found = 0;
-    while (found < 2 && std::fgets(line, sizeof(line), f)) {
-        if (std::sscanf(line, "voluntary_ctxt_switches: %ld", &vol)   == 1) ++found;
-        if (std::sscanf(line, "nonvoluntary_ctxt_switches: %ld", &invol) == 1) ++found;
-    }
-    std::fclose(f);
-}
-
-// =============================================================================
 // ProbeReader implementation
 // =============================================================================
 
 ProbeSnapshot ProbeReader::snapshot() {
     ProbeSnapshot s;
 
-    // Context switches from /proc/self/status
-    read_ctx_switches(s.vol_ctx, s.invol_ctx);
-
-    // Page faults from getrusage(RUSAGE_THREAD)
-    // RUSAGE_THREAD measures the calling thread only — exactly what we want.
-    struct rusage ru;
-    if (getrusage(RUSAGE_THREAD, &ru) == 0) {
-        s.min_faults = ru.ru_minflt;
-        s.maj_faults = ru.ru_majflt;
+#ifdef __linux__
+    // Linux: parse /proc/self/status for per-process context switch counters.
+    {
+        FILE* f = std::fopen("/proc/self/status", "r");
+        if (f) {
+            char line[256];
+            int  found = 0;
+            while (found < 2 && std::fgets(line, sizeof(line), f)) {
+                if (std::sscanf(line, "voluntary_ctxt_switches: %ld",    &s.vol_ctx)   == 1) ++found;
+                if (std::sscanf(line, "nonvoluntary_ctxt_switches: %ld", &s.invol_ctx) == 1) ++found;
+            }
+            std::fclose(f);
+        }
     }
+
+    // Linux: RUSAGE_THREAD gives thread-level page faults.
+    {
+        struct rusage ru;
+        if (getrusage(RUSAGE_THREAD, &ru) == 0) {
+            s.min_faults = ru.ru_minflt;
+            s.maj_faults = ru.ru_majflt;
+        }
+    }
+#else
+    // macOS / BSD: getrusage(RUSAGE_SELF) provides process-level counters for
+    // both context switches and page faults (no POSIX thread-level equivalent).
+    {
+        struct rusage ru;
+        if (getrusage(RUSAGE_SELF, &ru) == 0) {
+            s.vol_ctx    = ru.ru_nvcsw;
+            s.invol_ctx  = ru.ru_nivcsw;
+            s.min_faults = ru.ru_minflt;
+            s.maj_faults = ru.ru_majflt;
+        }
+    }
+#endif
 
     return s;
 }
