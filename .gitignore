@@ -1,2 +1,4 @@
 *.wav
 [Bb]uild/
+.vscode/*
+data/*
