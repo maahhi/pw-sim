@@ -3,10 +3,12 @@
 #include <vector>
 #include <cstring>  // memset
 
-AudioWriter::AudioWriter(const std::string& path, int channels, int sample_rate)
+AudioWriter::AudioWriter(const std::string& path, int channels, int sample_rate,
+                         int subformat)
     : m_path(path)
     , m_channels(channels)
     , m_sample_rate(sample_rate)
+    , m_subformat(subformat)
 {}
 
 AudioWriter::~AudioWriter() {
@@ -19,7 +21,7 @@ void AudioWriter::open() {
     m_info.channels   = m_channels;
     // Tier 1: always write float32 WAV.
     // Tier 3: this will be driven by SimConfig::output_format.
-    m_info.format     = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+    m_info.format     = SF_FORMAT_WAV | m_subformat;
 
     m_file = sf_open(m_path.c_str(), SFM_WRITE, &m_info);
     if (!m_file) {

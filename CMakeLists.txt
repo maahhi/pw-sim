@@ -26,6 +26,16 @@ add_link_options(
   $<$<CONFIG:Debug>:-fsanitize=address>
 )
 
+# toml++ (header-only TOML parser — used by config/TomlLoader.cpp)
+include(FetchContent)
+FetchContent_Declare(
+  tomlplusplus
+  GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+  GIT_TAG        v3.4.0
+  GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 # RNNoise static library (third_party/rnnoise)
 set(RNNOISE_SRC ${CMAKE_SOURCE_DIR}/third_party/rnnoise/src)
 add_library(rnnoise STATIC
@@ -95,6 +105,9 @@ find_path(SNDFILE_INCLUDE sndfile.h REQUIRED)
 # Source files
 set(SOURCES
   src/main.cpp
+  src/config/SimConfig.cpp
+  src/config/TomlLoader.cpp
+  src/config/CliParser.cpp
   src/io/AudioReader.cpp
   src/io/AudioWriter.cpp
   src/engine/SimEngine.cpp
@@ -130,6 +143,7 @@ else()
 endif()
 
 target_link_libraries(pw-sim PRIVATE
+  tomlplusplus::tomlplusplus
   ${SNDFILE_LIB}
   rnnoise
   RTNeural

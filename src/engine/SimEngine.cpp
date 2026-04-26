@@ -13,6 +13,7 @@
 #include <stdexcept>
 #include <vector>
 #include <string>
+#include <sndfile.h>
 #include <pthread.h>
 #include <sched.h>
 
@@ -21,21 +22,15 @@ static double timespec_to_us(const struct timespec& ts) {
            static_cast<double>(ts.tv_nsec) / 1e3;
 }
 
-static const char* clock_mode_str(ClockMode m) {
-    return m == ClockMode::REALTIME ? "REALTIME" : "SEQUENTIAL";
-}
-
-static const char* xrun_policy_str(XrunPolicy p) {
-    switch (p) {
-        case XrunPolicy::ZEROS:       return "zeros";
-        case XrunPolicy::REPEAT_LAST: return "repeat_last";
-        case XrunPolicy::PASSTHROUGH: return "passthrough";
-    }
-    return "unknown";
-}
-
-static const char* prefill_str(PreFillPolicy p) {
-    return p == PreFillPolicy::PASSTHROUGH ? "passthrough" : "zeros";
+// Map output_format string to a libsndfile subformat code.
+// "same" uses the input file's own subformat (SF_FORMAT_SUBMASK).
+static int resolve_output_subformat(const std::string& fmt, int input_sf_format) {
+    if (fmt == "same") return input_sf_format & SF_FORMAT_SUBMASK;
+    if (fmt == "s16")  return SF_FORMAT_PCM_16;
+    if (fmt == "s24")  return SF_FORMAT_PCM_24;
+    if (fmt == "f32")  return SF_FORMAT_FLOAT;
+    throw std::runtime_error(
+        "unknown output_format '" + fmt + "' (valid: same, s16, s24, f32)");
 }
 
 SimEngine::SimEngine(const SimConfig& config, FutFn fut)
@@ -121,7 +116,9 @@ void SimEngine::run() {
             file_rate, m_config.sample_rate);
     }
 
-    AudioWriter writer(m_config.output_file, channels, file_rate);
+    const int out_sub = resolve_output_subformat(m_config.output_format,
+                                                 reader.sf_format());
+    AudioWriter writer(m_config.output_file, channels, file_rate, out_sub);
     writer.open();
 
     MetricsWriter csv(m_config.log_file);
@@ -135,13 +132,13 @@ void SimEngine::run() {
     const double budget = effective_deadline_us(m_config);
     const double period = (static_cast<double>(chunk_size) /
                            static_cast<double>(m_config.sample_rate)) * 1e6;
-    VirtualClock vclock(period, m_config.deadline_offset_us);
+    VirtualClock vclock(period, m_config.deadline_budget_us_offset);
 
     const size_t est_chunks = (total_frames + chunk_size - 1) / chunk_size;
 
     std::printf("\n");
     std::printf("=================================================================\n");
-    std::printf("                      pw-sim  Tier 2\n");
+    std::printf("                      pw-sim  Tier 3\n");
     std::printf("=================================================================\n");
     std::printf("  input          : %s\n",    m_config.input_file.c_str());
     std::printf("  output         : %s\n",    m_config.output_file.c_str());
@@ -152,13 +149,15 @@ void SimEngine::run() {
     std::printf("  chunk size     : %zu frames\n", chunk_size);
     std::printf("  period         : %.1f us\n",  period);
     std::printf("  budget         : %.1f us", budget);
-    if (m_config.deadline_offset_us > 0.0)
-        std::printf("  (period - %.0f us offset)", m_config.deadline_offset_us);
+    if (m_config.deadline_budget_us_offset > 0.0)
+        std::printf("  (period - %.0f us offset)", m_config.deadline_budget_us_offset);
     std::printf("\n");
     std::printf("  clock mode     : %s\n",   clock_mode_str(m_config.clock_mode));
     if (m_config.clock_mode == ClockMode::REALTIME)
         std::printf("  xrun policy    : %s\n", xrun_policy_str(m_config.xrun_policy));
     std::printf("  pre-fill       : %s\n",   prefill_str(m_config.pre_fill));
+    std::printf("  tail policy    : %s\n",   tail_policy_str(m_config.tail_policy));
+    std::printf("  output format  : %s\n",   m_config.output_format.c_str());
     std::printf("  warmup chunks  : %zu\n",  m_config.warmup_chunks);
     std::printf("  total frames   : %zu (~%zu chunks)\n", total_frames, est_chunks);
     std::printf("  probes         : cpu=%s  ctx_sw=%s  page_faults=%s\n",
@@ -182,6 +181,10 @@ void SimEngine::run() {
 
         size_t frames_read = reader.read(in_buf.data(), chunk_size);
         if (frames_read == 0) break;
+
+        // Tail policy: skip the last partial chunk if configured to drop it.
+        if (frames_read < chunk_size && m_config.tail_policy == TailPolicy::DROP)
+            break;
 
         const bool is_warmup = (chunk_index < m_config.warmup_chunks);
 
@@ -263,7 +266,6 @@ void SimEngine::run() {
             m.xrun_applied = true;
         }
 
-        // Update last_good only when output was not replaced
         if (!m.xrun_applied)
             std::memcpy(last_good.data(), out_buf.data(), buf_samples * sizeof(float));
 

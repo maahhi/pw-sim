@@ -1,0 +1,26 @@
+[engine]
+clock_mode              = "realtime"
+chunk_size              = 256
+sample_rate             = 48000
+warmup_chunks           = 4
+pre_fill_output         = "zeros"
+
+[io]
+input_file              = "input.wav"
+output_file             = "output.wav"
+output_format           = "same"
+tail_policy             = "zero_pad"
+
+[realtime]
+xrun_policy             = "zeros"
+deadline_budget_us_offset = 0.0
+
+[metrics]
+log_file                = "pw-sim.log.csv"
+warn_cpu_governor       = true
+try_rt_priority         = false
+
+[probes]
+cpu_time                = true
+context_switches        = true
+page_faults             = true

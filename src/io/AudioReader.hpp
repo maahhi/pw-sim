@@ -39,6 +39,7 @@ public:
     int    channels()    const { return m_info.channels; }
     int    sample_rate() const { return m_info.samplerate; }
     size_t total_frames() const { return static_cast<size_t>(m_info.frames); }
+    int    sf_format()   const { return m_info.format; }   // raw SF_INFO format bitfield
     std::string format_description() const;
 
 private:
