@@ -65,7 +65,7 @@ struct SimConfig {
 
     // Number of PCM frames handed to FUT per callback.
     // Common PipeWire values: 64, 128, 256, 512, 1024
-    size_t chunk_size = 256;
+    size_t chunk_size = 480;
 
     // Sample rate in Hz. Must match the input file — used to compute deadline.
     size_t sample_rate = 48000;

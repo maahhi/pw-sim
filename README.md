@@ -373,3 +373,9 @@ pw-sim/
 ```
 ## fut helper
 `fut-prompt-helper.txt` is a summary that help you write your fut easier with help of llms
+
+## RNNoise FUT
+In order to have pw-sim run the fut that uses RNNoise model you must run with --rnnoise. Example:
+```bash
+pw-sim --rnnoise input.wav output.wav
+```

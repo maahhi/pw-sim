@@ -57,7 +57,7 @@ inline FutFn make_rnnoise_fut() {
         }
     };
 
-    auto st = std::make_shared<State>(rnnoise_get_frame_size());
+    auto st = std::make_shared<State>(rnnoise_get_frame_size()); // Todo: make it non-heap
 
     return [st](const float* input, float* output,
                 size_t frames, size_t channels, size_t /*chunk_index*/) {
