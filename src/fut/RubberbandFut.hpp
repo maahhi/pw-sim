@@ -41,6 +41,7 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
         size_t channels    = 0;
         size_t sample_rate;
         double semitones;
+        double pitch_scale;
 
         std::vector<Chan>         in_ch;
         std::vector<Chan>         out_ch;
@@ -48,13 +49,12 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
         std::vector<const float*> in_ptrs;
         std::vector<float*>       out_ptrs;
 
-        State(size_t sr, double s) : sample_rate(sr), semitones(s) {}
+        State(size_t sr, double s)
+            : sample_rate(sr), semitones(s), pitch_scale(std::pow(2.0, s / 12.0)) {}
 
         void init(size_t ch) {
             channels = ch;
-            double pitch_scale = std::pow(2.0, semitones / 12.0);
-            auto opts = RBS::OptionProcessRealTime |
-                        RBS::OptionPitchHighConsistency;
+            auto opts = RBS::OptionProcessRealTime | RBS::OptionPitchHighConsistency;
             rb = std::make_unique<RBS>(sample_rate, ch, opts, 1.0, pitch_scale);
 
             in_ch.assign(ch, {});
@@ -75,7 +75,7 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
     std::fprintf(stderr,
         "[RubberbandFut] semitones=%.2f  pitch_scale=%.6f  sample_rate=%zu"
         "  (engine init deferred to first call)\n",
-        semitones, std::pow(2.0, semitones / 12.0), sample_rate);
+        semitones, st->pitch_scale, sample_rate);
 
     return [st](const float* input, float* output,
                 size_t frames, size_t channels, size_t /*chunk_index*/) {
@@ -88,12 +88,10 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
             st->out_ch[c].compact();
         }
 
-        // Deinterleave input into per-channel FIFOs
         for (size_t f = 0; f < frames; ++f)
             for (size_t c = 0; c < ch; ++c)
                 st->in_ch[c].buf.push_back(input[f * ch + c]);
 
-        // Feed rubberband until it stops requesting samples or input runs dry
         for (;;) {
             size_t need = st->rb->getSamplesRequired();
             if (need == 0) break;
@@ -113,7 +111,6 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
             st->rb->process(st->in_ptrs.data(), need, false);
         }
 
-        // Drain all available output frames into per-channel out FIFOs
         for (;;) {
             int avail = st->rb->available();
             if (avail <= 0) break;
@@ -129,7 +126,6 @@ inline FutFn make_rubberband_fut(size_t sample_rate, double semitones) {
                                          st->plane[c].data() + got);
         }
 
-        // Interleave output to caller; zero-fill during initial engine latency
         for (size_t f = 0; f < frames; ++f)
             for (size_t c = 0; c < ch; ++c)
                 output[f * ch + c] =

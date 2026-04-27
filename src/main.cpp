@@ -14,6 +14,9 @@
 #ifdef PW_SIM_HAVE_RUBBERBAND
 #include "fut/RubberbandFut.hpp"
 #endif
+#if defined(PW_SIM_HAVE_SPLEETER) && defined(PW_SIM_HAVE_RUBBERBAND)
+#include "fut/SpleeterRubberbandFut.hpp"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -106,7 +109,14 @@ static FutFn make_active_fut(bool use_rnnoise, const std::string& nam_model,
     if (!nam_model.empty())
         return make_nam_fut(nam_model);
 
-    // ── Spleeter ──────────────────────────────────────────────────────────────
+    // ── Spleeter + Rubberband combined (pitch-shift vocals, pass accompaniment through) ──
+#if defined(PW_SIM_HAVE_SPLEETER) && defined(PW_SIM_HAVE_RUBBERBAND)
+    if (!spleeter_model.empty() && use_rubberband)
+        return make_spleeter_rubberband_fut(spleeter_model, rubberband_semitones, sample_rate,
+                                            spleeter_stem == "accompaniment");
+#endif
+
+    // ── Spleeter alone ────────────────────────────────────────────────────────
 #ifdef PW_SIM_HAVE_SPLEETER
     if (!spleeter_model.empty())
         return make_spleeter_fut(spleeter_model, spleeter_stem);
@@ -115,7 +125,7 @@ static FutFn make_active_fut(bool use_rnnoise, const std::string& nam_model,
     (void)spleeter_stem;
 #endif
 
-    // ── Rubberband ────────────────────────────────────────────────────────────
+    // ── Rubberband alone ──────────────────────────────────────────────────────
 #ifdef PW_SIM_HAVE_RUBBERBAND
     if (use_rubberband)
         return make_rubberband_fut(sample_rate, rubberband_semitones);
@@ -164,10 +174,11 @@ int main(int argc, char* argv[]) {
                                       : std::stod(rubberband_semi_str);
 
         {
-            int fut_count = (int)use_rnnoise + (int)!nam_model.empty()
-                          + (int)!spleeter_model.empty() + (int)use_rubberband;
+            // spleeter and rubberband may be combined; treat the pair as one slot
+            bool spleeter_group = !spleeter_model.empty() || use_rubberband;
+            int fut_count = (int)use_rnnoise + (int)!nam_model.empty() + (int)spleeter_group;
             if (fut_count > 1)
-                throw std::runtime_error("--rnnoise, --nam, --spleeter, and --rubberband are mutually exclusive");
+                throw std::runtime_error("--rnnoise, --nam, and --spleeter/--rubberband are mutually exclusive");
         }
 
 #ifndef PW_SIM_HAVE_SPLEETER
