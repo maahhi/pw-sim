@@ -8,6 +8,12 @@
 #include "fut/stubs/SlowFut.hpp"
 #include "fut/RnnoiseFut.hpp"
 #include "fut/NamFut.hpp"
+#ifdef PW_SIM_HAVE_SPLEETER
+#include "fut/SpleeterFut.hpp"
+#endif
+#ifdef PW_SIM_HAVE_RUBBERBAND
+#include "fut/RubberbandFut.hpp"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -67,12 +73,28 @@ static void print_usage() {
         "FUT selection (mutually exclusive):\n"
         "  --rnnoise                        use RNNoise noise suppression\n"
         "  --nam <model.nam>                use Neural Amp Modeler model\n"
+#ifdef PW_SIM_HAVE_SPLEETER
+        "  --spleeter <model_dir>           use Spleeter 2-stem source separation\n"
+        "  --spleeter-stem <vocals|accompaniment>  which stem to output (default: vocals)\n"
+#else
+        "  --spleeter                       [disabled — libtensorflow not found at build time]\n"
+#endif
+#ifdef PW_SIM_HAVE_RUBBERBAND
+        "  --rubberband                     use Rubberband real-time pitch shifting\n"
+        "  --rubberband-semitones <N>       semitones to shift (float, default: 2.0)\n"
+#else
+        "  --rubberband                     [disabled — librubberband not found at build time]\n"
+#endif
         "\n"
         "See configure.md for the full TOML schema and example runs.\n"
     );
 }
 
-static FutFn make_active_fut(bool use_rnnoise, const std::string& nam_model) {
+static FutFn make_active_fut(bool use_rnnoise, const std::string& nam_model,
+                             const std::string& spleeter_model,
+                             const std::string& spleeter_stem,
+                             bool use_rubberband, double rubberband_semitones,
+                             size_t sample_rate) {
 
     // ── RNNoise ───────────────────────────────────────────────────────────────
     if (use_rnnoise) {
@@ -83,6 +105,25 @@ static FutFn make_active_fut(bool use_rnnoise, const std::string& nam_model) {
     // ── NAM ───────────────────────────────────────────────────────────────────
     if (!nam_model.empty())
         return make_nam_fut(nam_model);
+
+    // ── Spleeter ──────────────────────────────────────────────────────────────
+#ifdef PW_SIM_HAVE_SPLEETER
+    if (!spleeter_model.empty())
+        return make_spleeter_fut(spleeter_model, spleeter_stem);
+#else
+    (void)spleeter_model;
+    (void)spleeter_stem;
+#endif
+
+    // ── Rubberband ────────────────────────────────────────────────────────────
+#ifdef PW_SIM_HAVE_RUBBERBAND
+    if (use_rubberband)
+        return make_rubberband_fut(sample_rate, rubberband_semitones);
+#else
+    (void)use_rubberband;
+    (void)rubberband_semitones;
+    (void)sample_rate;
+#endif
 
     // ── Option 1: Passthrough ─────────────────────────────────────────────────
     // return make_passthrough_fut();
@@ -111,11 +152,32 @@ int main(int argc, char* argv[]) {
         }
 
         // 1. Extract FUT flags before any config parsing.
-        bool        use_rnnoise = consume_flag(argc, argv, "--rnnoise");
-        std::string nam_model   = consume_value_flag(argc, argv, "--nam");
+        bool        use_rnnoise          = consume_flag(argc, argv, "--rnnoise");
+        std::string nam_model            = consume_value_flag(argc, argv, "--nam");
+        std::string spleeter_model       = consume_value_flag(argc, argv, "--spleeter");
+        std::string spleeter_stem        = consume_value_flag(argc, argv, "--spleeter-stem");
+        bool        use_rubberband       = consume_flag(argc, argv, "--rubberband");
+        std::string rubberband_semi_str  = consume_value_flag(argc, argv, "--rubberband-semitones");
+        if (spleeter_stem.empty()) spleeter_stem = "vocals";
+        double rubberband_semitones = rubberband_semi_str.empty()
+                                      ? 2.0
+                                      : std::stod(rubberband_semi_str);
 
-        if (use_rnnoise && !nam_model.empty())
-            throw std::runtime_error("--rnnoise and --nam are mutually exclusive");
+        {
+            int fut_count = (int)use_rnnoise + (int)!nam_model.empty()
+                          + (int)!spleeter_model.empty() + (int)use_rubberband;
+            if (fut_count > 1)
+                throw std::runtime_error("--rnnoise, --nam, --spleeter, and --rubberband are mutually exclusive");
+        }
+
+#ifndef PW_SIM_HAVE_SPLEETER
+        if (!spleeter_model.empty())
+            throw std::runtime_error("--spleeter: libtensorflow was not found at build time — rebuild with libtensorflow installed");
+#endif
+#ifndef PW_SIM_HAVE_RUBBERBAND
+        if (use_rubberband)
+            throw std::runtime_error("--rubberband: librubberband was not found at build time — install rubberband-dev and rebuild");
+#endif
 
         // 2. Parse all config flags, stripping them from argv.
         config::CliArgs cli = config::parse_cli(argc, argv);
@@ -134,7 +196,8 @@ int main(int argc, char* argv[]) {
         if (argc >= 3 && !cli.output_file) cfg.output_file = argv[2];
 
         // 6. Run.
-        FutFn     fut = make_active_fut(use_rnnoise, nam_model);
+        FutFn     fut = make_active_fut(use_rnnoise, nam_model, spleeter_model, spleeter_stem,
+                                        use_rubberband, rubberband_semitones, cfg.sample_rate);
         SimEngine engine(cfg, std::move(fut));
         engine.run();
         return EXIT_SUCCESS;

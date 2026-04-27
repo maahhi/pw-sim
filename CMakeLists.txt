@@ -102,6 +102,38 @@ target_compile_options(nam PRIVATE -w)
 find_library(SNDFILE_LIB sndfile REQUIRED)
 find_path(SNDFILE_INCLUDE sndfile.h REQUIRED)
 
+# Find libtensorflow (optional — enables SpleeterFut)
+find_library(TENSORFLOW_LIB tensorflow
+  HINTS
+    /opt/homebrew/lib          # macOS Homebrew (Apple Silicon)
+    /usr/local/lib             # macOS Homebrew (Intel) + Linux manual install
+    /usr/lib
+    /usr/lib/x86_64-linux-gnu
+    /usr/lib/aarch64-linux-gnu
+)
+find_path(TENSORFLOW_INCLUDE tensorflow/c/c_api.h
+  HINTS
+    /opt/homebrew/include
+    /usr/local/include
+    /usr/include
+)
+
+# Find librubberband (optional — enables RubberbandFut)
+find_library(RUBBERBAND_LIB rubberband
+  HINTS
+    /opt/homebrew/lib
+    /usr/local/lib
+    /usr/lib
+    /usr/lib/x86_64-linux-gnu
+    /usr/lib/aarch64-linux-gnu
+)
+find_path(RUBBERBAND_INCLUDE rubberband/RubberBandStretcher.h
+  HINTS
+    /opt/homebrew/include
+    /usr/local/include
+    /usr/include
+)
+
 # Source files
 set(SOURCES
   src/main.cpp
@@ -151,6 +183,24 @@ target_link_libraries(pw-sim PRIVATE
   pthread
   m
 )
+
+if(TENSORFLOW_LIB AND TENSORFLOW_INCLUDE)
+  message(STATUS "libtensorflow: ${TENSORFLOW_LIB}")
+  target_include_directories(pw-sim PRIVATE ${TENSORFLOW_INCLUDE})
+  target_link_libraries(pw-sim PRIVATE ${TENSORFLOW_LIB})
+  target_compile_definitions(pw-sim PRIVATE PW_SIM_HAVE_SPLEETER)
+else()
+  message(STATUS "libtensorflow: not found — SpleeterFut disabled")
+endif()
+
+if(RUBBERBAND_LIB AND RUBBERBAND_INCLUDE)
+  message(STATUS "librubberband: ${RUBBERBAND_LIB}")
+  target_include_directories(pw-sim PRIVATE ${RUBBERBAND_INCLUDE})
+  target_link_libraries(pw-sim PRIVATE ${RUBBERBAND_LIB})
+  target_compile_definitions(pw-sim PRIVATE PW_SIM_HAVE_RUBBERBAND)
+else()
+  message(STATUS "librubberband: not found — RubberbandFut disabled")
+endif()
 
 # Install
 install(TARGETS pw-sim DESTINATION bin)

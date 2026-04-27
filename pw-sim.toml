@@ -1,6 +1,6 @@
 [engine]
 clock_mode              = "realtime"
-chunk_size              = 256
+chunk_size              = 25
 sample_rate             = 48000
 warmup_chunks           = 4
 pre_fill_output         = "zeros"
